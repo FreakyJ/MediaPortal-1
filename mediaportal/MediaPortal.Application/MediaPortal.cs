@@ -1030,6 +1030,77 @@ public class MediaPortalApp : D3DApp, IRender
         Action action;
         char key;
         Keys keyCode;
+
+        // Workaround for the Win7 HalfFullscreen Bug: triggers a resize if you hit F12
+        if (msg.Msg == 0x0100)
+        {
+          if ((Keys)msg.WParam == Keys.F12)
+          {
+            Log.Info("D3D: KeyPressed F12 => trigger Resize! Res: Width: BackBuffer: " + GUIGraphicsContext.DX9Device.PresentationParameters.BackBufferWidth + " - DisplayMode: " + graphicsSettings.DisplayMode.Width);
+            /*GUIMessage temp = new GUIMessage();
+            temp.Message = GUIMessage.MessageType.GUI_MSG_SWITCH_FULL_WINDOWED;
+            temp.Param1 = 1;
+            OnMessage(temp);*/
+            
+            /*SwitchFullScreenOrWindowed(false);
+            // Must set the FVF after reset
+            GUIFontManager.SetDevice();*/
+            //ToggleFullWindowed();
+            //ToggleFullWindowed();
+
+            SavePlayerState();
+
+            // stolen from ToggleFullWindowed() d3dapp.cs @2062
+
+            _toggleFullWindowed = true;
+            Log.Info("D3D: -F12- Fullscreen / windowed mode toggled");
+            isMaximized = !isMaximized;
+            //Force player to stop so as not to crash during toggle - not needed here, we save the playerState above!
+            /*if (GUIGraphicsContext.Vmr9Active)
+            {
+              Log.Info("D3D: Vmr9Active - Stopping media");
+              //g_Player.Stop();
+            }*/
+            GUITextureManager.CleanupThumbs();
+            GUITextureManager.Dispose();
+            GUIFontManager.Dispose();
+
+            Log.Info("D3D: -F12- Switching windowed mode -> fullscreen");
+            if (autoHideTaskbar)
+            {
+              Win32API.EnableStartBar(false);
+              Win32API.ShowStartBar(false);
+            }
+
+            this.FormBorderStyle = FormBorderStyle.None;
+            this.MaximizeBox = false;
+            this.MinimizeBox = false;
+            this.Menu = null;
+            oldBounds = this.Bounds;
+            Rectangle newBounds = GUIGraphicsContext.currentScreen.Bounds;
+            this.Bounds = newBounds;
+            this.Update();
+            Log.Info("D3D: -F12- Switching windowed mode -> fullscreen done - Maximized: {0}", isMaximized);
+            Log.Info("D3D: -F12- Client size: {0}x{1} - Screen: {2}x{3}",
+                      this.ClientSize.Width, this.ClientSize.Height,
+                      GUIGraphicsContext.currentScreen.Bounds.Width, GUIGraphicsContext.currentScreen.Bounds.Height);
+            SwitchFullScreenOrWindowed(false);
+            OnDeviceReset(null, null);
+            _toggleFullWindowed = false;
+
+            Log.Info("D3D: -F12- --- RESUME PLAYER ---");
+            ResumePlayer();
+            if (g_Player.Playing && !g_Player.IsMusic)
+            {
+              // we have to wait a second until the player has continued the video
+              Thread.Sleep(1000);
+              Key key_F12 = new Key(32, 0);
+              action = new Action(key_F12, Action.ActionType.ACTION_PAUSE, 0, 0);
+              GUIGraphicsContext.OnAction(action);
+            }
+          }
+        }
+
         if (InputDevices.WndProc(ref msg, out action, out key, out keyCode))
         {
           if (msg.Result.ToInt32() != 1)

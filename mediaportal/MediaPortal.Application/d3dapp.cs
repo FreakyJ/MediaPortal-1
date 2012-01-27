@@ -87,6 +87,7 @@ namespace MediaPortal
     protected int m_iVolume = -1;
     protected bool miniTvMode = false; // minitv means minsize < 720, always on top, focus may leave
     protected D3DEnumeration enumerationSettings = new D3DEnumeration();
+    protected System.Windows.Forms.Timer timer = new System.Windows.Forms.Timer(); // Timer
     // We need to keep track of our enumeration settings
 
     protected D3DSettings graphicsSettings = new D3DSettings();
@@ -250,6 +251,7 @@ namespace MediaPortal
     private bool _wasPlayingVideo = false;
     private int _iActiveWindow = -1;
     private double _currentPlayerPos = 0;
+    private bool _currentPlayerIsTV = false;
     private string _strCurrentFile;
     private PlayListType _currentPlayListType = PlayListType.PLAYLIST_NONE;
     private PlayList _currentPlayList = null;
@@ -1299,6 +1301,11 @@ namespace MediaPortal
     /// </summary>
     protected void SavePlayerState()
     {
+      /*var callStack = new StackTrace();
+      for (var i = 1; i < callStack.FrameCount; i++)
+      {
+        Log.Info("SavePlayer StackTrace: [i:" + i + "] - " + callStack.GetFrame(i).GetMethod());
+      }*/
       // Is App not minimized to tray and is a player active?
       if (WindowState != FormWindowState.Minimized &&
           !_wasPlayingVideo &&
@@ -1312,7 +1319,9 @@ namespace MediaPortal
         _currentPlayerPos = g_Player.CurrentPosition;
         _currentPlayListType = playlistPlayer.CurrentPlaylistType;
         _currentPlayList = new PlayList();
-
+        _currentPlayerIsTV = g_Player.IsTV;
+        Log.Info("SavePlayerState: g_Player.StreamPosition " + g_Player.StreamPosition + " IsTV " + g_Player.IsTV + " AudioStreams " + g_Player.AudioStreams + " CanSeek " + g_Player.CanSeek + " ContentStart " + g_Player.ContentStart + " CurrentEditionStream " + g_Player.CurrentEditionStream + " CurrentFile " + g_Player.CurrentFile + " currentFileName " + g_Player.currentFileName + " CurrentPosition " + g_Player.CurrentPosition + " Duration " + g_Player.Duration + " MediaInfo " + g_Player.MediaInfo + " Player " + g_Player.Player + " ShowFullScreenWindowTV " + g_Player.ShowFullScreenWindowTV + "g_Player.SourceWindow " + g_Player.SourceWindow);
+        
         Log.Info("D3D: Saving fullscreen state for resume: {0}", _fullscreen);
         PlayList tempList = playlistPlayer.GetPlaylist(_currentPlayListType);
         if (tempList.Count == 0 && g_Player.IsDVD == true)
@@ -1333,14 +1342,16 @@ namespace MediaPortal
           }
         }
         _strCurrentFile = playlistPlayer.Get(playlistPlayer.CurrentSong);
-        if (_strCurrentFile.Equals(string.Empty) && g_Player.IsDVD == true)
+        if ((_strCurrentFile.Equals(string.Empty) && g_Player.IsDVD == true) || g_Player.IsTV == true)
         {
           _strCurrentFile = g_Player.CurrentFile;
         }
         Log.Info(
           "D3D: Form resized - Stopping media - Current playlist: Type: {0} / Size: {1} / Current item: {2} / Filename: {3} / Position: {4}",
           _currentPlayListType, _currentPlayList.Count, playlistPlayer.CurrentSong, _strCurrentFile, _currentPlayerPos);
-        g_Player.Stop();
+        //g_Player.Stop();
+        //g_Player.StopAndKeepTimeShifting();
+        g_Player.PauseGraph();
 
         _iActiveWindow = GUIWindowManager.ActiveWindow;
       }
@@ -1354,7 +1365,11 @@ namespace MediaPortal
       if (_wasPlayingVideo) // was any player active at all?
       {
         _wasPlayingVideo = false;
-
+        /*var callStack = new StackTrace();
+        for (var i = 1; i < callStack.FrameCount; i++)
+        {
+          Log.Info("ResumePlayer StackTrace: [i:" + i + "] - " + callStack.GetFrame(i).GetMethod());
+        }*/
 
         // we were watching some audio/video
         Log.Info("D3D: RestorePlayers - Resuming: {0}", _strCurrentFile);
@@ -1371,6 +1386,7 @@ namespace MediaPortal
             playlist.Add(itemNew);
           }
         }
+        
         if (playlist.Count > 0 && playlist[0].Type.Equals(PlayListItem.PlayListItemType.DVD))
         {
           // we were watching DVD
@@ -1393,11 +1409,23 @@ namespace MediaPortal
         }
         else
         {
-          playlistPlayer.Play(_strCurrentFile); // some standard audio/video
+          if (_currentPlayerIsTV == true)
+          {
+            Log.Info("-------- LIVETV START ----------");
+            GUIMessage msg_F12 = new GUIMessage(GUIMessage.MessageType.GUI_MSG_RESUME_TV, 0, 0, 0, 0, 0, null);
+            GUIWindowManager.SendMessage(msg_F12);
+            g_Player.ContinueGraph();
+            //if (!g_Player.Playing) g_Player.Play(_strCurrentFile, g_Player.MediaType.TV); // LiveTv
+          }
+          else
+          {
+            playlistPlayer.Play(_strCurrentFile); // some standard audio/video
+          }
         }
 
         if (g_Player.Playing)
         {
+          Log.Info("SEEK: " + _currentPlayerPos);
           g_Player.SeekAbsolute(_currentPlayerPos);
         }
 
@@ -2364,10 +2392,31 @@ namespace MediaPortal
           !_ignoreNextResizeEvent && this.WindowState == _windowState)
       {
         Log.Info("Main: OnSizeChanged - Resetting device");
+        SavePlayerState();
         SwitchFullScreenOrWindowed(false);
         OnDeviceReset(null, null);
+        DoSleep(100); //avoid black picture
+        ResumePlayer();
+        Log.Info("Main: OnSizeChanged - Start Timer for pausing");
+
+        timer.Interval = 5000;
+        timer.Tick += new EventHandler(timer_Tick); // Eventhandler
+        if (!g_Player.IsMusic) //keep current state if Music is playing: isPlaying => keeps Playing
+        {
+          timer.Start();
+        }
+        //if (g_Player.Playing && !g_Player.Paused) g_Player.Pause();
       }
       base.OnSizeChanged(e);
+    }
+
+    void timer_Tick(object sender, EventArgs e)
+    {
+      Log.Info("Main: PLAYER Pause (Timer)");
+      Key key_F12 = new Key(32, 0);
+      GUI.Library.Action action = new GUI.Library.Action(key_F12, GUI.Library.Action.ActionType.ACTION_PAUSE, 0, 0);
+      GUIGraphicsContext.OnAction(action);
+      timer.Stop();
     }
 
     /// <summary>
@@ -2441,6 +2490,14 @@ namespace MediaPortal
       catch (Exception ex)
       {
         Log.Error("d3dapp: An error occured in OnResize - {0}", ex.ToString());
+      }
+
+      // Resize success?! If not trigger resize/reinit again
+      if (GUIGraphicsContext.DX9Device.PresentationParameters.BackBufferWidth != graphicsSettings.DisplayMode.Width)
+      {
+        Log.Info("D3D: BackBuffer doesn't match DisplayMode! Trigger Resize/Reinit");
+        // trigger resize again!
+        // TODO: Call F12 function
       }
     }
 
